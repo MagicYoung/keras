@@ -930,13 +930,14 @@ class Sequential(Model, containers.Sequential):
 
         # start generator thread storing batches into a queue
         generator_queue = queue.Queue()
-        _stop = threading.Event()
+        _stop = threading.Event() # the internal flag is initialized as False
 
         def generator_task():
             i = 0
-            while not _stop.is_set():
+            while not _stop.is_set(): # True iff internal flag is True.
                 try:
-                    if generator_queue.qsize() < max_queue_size:
+                    if generator_queue.qsize() < max_queue_size: 
+                    # althought initial queue size is infinite, .qsize() is still 0, and .empty() True.
                         generator_output = next(generator)
                         generator_queue.put(generator_output)
                         i += 1
@@ -1166,24 +1167,29 @@ class Graph(Model, containers.Graph):
         outs = self._test_loop(self._test, ins, batch_size, verbose)
         return outs[0]
 
-    def evaluate_generator(self, data_generator, batch_size=128, verbose=0, sample_weight={}):
+    def evaluate_generator(self, data_generator, batch_size=128, verbose=0):
         '''Compute the loss on some input data generator, batch by batch.
 
         Arguments: see `fit` method.
         '''
-        nb_sample = data_generator. # number of samples over all batches 
         outs = []
         batch_end = 0
-        for batch_index, data_dict in enumerate(data_generator):
-            sample_weight = [standardize_weights(data_dict[name],
-                                             sample_weight=sample_weight.get(name)) for name in self.output_order]
-            ins_batch = [data_dict[name] for name in self.input_order] + [standardize_y(data_dict[name]) for name in self.output_order] + sample_weight
-            nb_sample_batch = len(ins_batch[0])
-            nb_sample += nb_sample_batch
+        if verbose == 1:
+            progbar = Progbar(target=batch_end)
+        for batch_index, generator_output in enumerate(data_generator):
+            data_batch, sample_weight_batch = input_validation(generator_output)
+            # some function that replace ._test_loop() 
+            sample_weight = [standardize_weights(data_batch[name],
+                                             sample_weight=sample_weight_batch.get(name)) 
+                                        for name in self.output_order]
+            ins_batch = [data_batch[name] for name in self.input_order] 
+                    + [standardize_y(data[name]) for name in self.output_order] 
+                    + sample_weight
             if len(set([len(a) for a in ins_batch])) != 1:
                 raise Exception('All input arrays and target arrays must have '
                                 'the same number of samples.')
-            batch_outs = self._test(ins_batch)
+            nb_sample_batch = len(ins_batch[0])
+            batch_outs = self.test_on_batch(data_batch, sample_weight=sample_weight)
             if type(batch_outs) == list:
                 if batch_index == 0:
                     for batch_out in enumerate(batch_outs):
@@ -1199,7 +1205,7 @@ class Graph(Model, containers.Graph):
             if verbose == 1:
                 progbar.update(batch_end)
         for i, out in enumerate(outs):
-            outs[i] /= nb_sample 
+            outs[i] /= batch_end 
         return outs[0]
 
 
@@ -1466,10 +1472,7 @@ class Graph(Model, containers.Graph):
                     if do_validation:
                         if hasattr(validation_data, 'next'):
                             # assumed to be generator
-                            # TODO: call self.evaluate_generator()
-                            val_f = self._test
                             val_outs = self.evaluate_generator(validation_data, 
-                                                               sample_weight=sample_weight, 
                                                                verbose=0)
                             #_stop.set()
                             #raise NotImplementedError()
