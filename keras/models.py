@@ -1684,13 +1684,16 @@ class Graph(Model, containers.Graph):
                 elif not _stop.is_set():
                     time.sleep(wait_time)
                     continue
+                elif _stop.is_set():
+                    print('threading is stopped.')
+                    break
+
                 # while not _stop.is_set():
                 #     if not generator_queue.empty():
                 #         generator_output = generator_queue.get()
                 #         break
                 #     else:
                 #         time.sleep(wait_time)
-
 
                 data, sample_weight = input_validation(generator_output)
 
@@ -1718,7 +1721,8 @@ class Graph(Model, containers.Graph):
                         validation_data = next(validation_generator)
                         if hasattr(validation_data, 'next'):
                             val_outs = self.evaluate_on_generator(validation_data,
-                                                            s)
+                                                            samples_per_epoch_valid,
+                                                            nb_worker)
                         else:
                             _stop.set()
                             raise Exception('validation data is not a generator')
@@ -1746,7 +1750,7 @@ class Graph(Model, containers.Graph):
         callbacks.on_train_end()
         return history
 
-    def evaluate_on_generator(self, data_generator, samples_per_epoch_valid, nb_worker=1):
+    def evaluate_on_generator(self, data_generator, samples_per_epoch_valid, verbose=0,nb_worker=1):
         max_queue_size_eval = 10
         wait_time_eval = 0.05
         outs = []
@@ -1763,7 +1767,7 @@ class Graph(Model, containers.Graph):
                 if len(generator_output) == 2:
                     data, sample_weight = generator_output
                 else:
-                    _stop.set()
+                    _stop_eval.set()
                     raise Exception('The generator output tuple must have '
                                     '2 dictionary elements: '
                                     '(data, sample_weight).')
@@ -1807,55 +1811,143 @@ class Graph(Model, containers.Graph):
             thread.start()
 
         samples_seen_eval = 0
+        batch_index = 0
         while samples_seen_eval < samples_per_epoch_valid:
-            if 
-        for batch_index, batch_dct in enumerate(data_generator):
-            data_val, sample_weight_val = input_validation(validation_data)
-
-        sample_weight = [standardize_weights(data[name],
-                    sample_weight=sample_weight.get(name),
-                    sample_weight_mode=self.sample_weight_modes.get(name)) for name in self.output_order]
-
-        outs = self._test_loop()
-        return outs[0]
-
-    def predict_on_generator(self, data_generator, batch_size=128, verbose=0):
-        '''Compute the loss on some input data generator, batch by batch.
-
-        Arguments: see `fit` method.
-        '''
-        outs = []
-        batch_end = 0
-        if verbose == 1:
-            progbar = Progbar(target=batch_end)
-        for batch_index, generator_output in enumerate(data_generator):
-            data_batch, sample_weight_batch = input_validation(generator_output)
-            # some function that replace ._test_loop() 
-            sample_weight = [standardize_weights(data_batch[name],
-                                             sample_weight=sample_weight_batch.get(name)) 
-                                        for name in self.output_order]
-            ins_batch = [data_batch[name] for name in self.input_order] 
-                    + [standardize_y(data[name]) for name in self.output_order] 
-                    + sample_weight
-            if len(set([len(a) for a in ins_batch])) != 1:
-                raise Exception('All input arrays and target arrays must have '
+            if not generator_queue_eval.empty():
+                    generator_output_eval = generator_queue_eval.get()
+                elif not _stop_eval.is_set():
+                    time.sleep(wait_time_eval)
+                    continue
+                elif _stop_eval.is_set():
+                    print('threading is stopped.')
+                    break
+            
+            data_eval, sample_weight_eval = input_validation(generator_output_eval)
+            sample_weight = [standardize_weights(data_evalval[name],
+                        sample_weight=sample_weight_eval.get(name),
+                        sample_weight_mode=self.sample_weight_modes.get(name)) for name in self.output_order]
+            ins = [data_eval[name] for name in self.input_order] + [standardize_y(data_eval[name]) for name in self.output_order] + sample_weight_eval
+            if len(set([len(a) for a in ins])) != 1:
+                raise Exception('All input arrays and target arrays in validation must have '
                                 'the same number of samples.')
-            nb_sample_batch = len(ins_batch[0])
-            batch_outs = self.test_on_batch(data_batch, sample_weight=sample_weight)
+            batch_outs = self._test(ins)
             if type(batch_outs) == list:
                 if batch_index == 0:
                     for batch_out in enumerate(batch_outs):
                         outs.append(0.)
                 for i, batch_out in enumerate(batch_outs):
-                    outs[i] += batch_out * nb_sample_batch 
+                    outs[i] += batch_out * len(batch_outs)
             else:
                 if batch_index == 0:
                     outs.append(0.)
-                outs[0] += batch_outs * nb_sample_batch
-            batch_end += nb_sample_batch
-            
+                outs[0] += batch_outs * len(batch_outs)
+
+            samples_seen_eval += len(batch_outs)
+            batch_index += 1
             if verbose == 1:
-                progbar.update(batch_end)
+                progbar.update(samples_seen_eval)
+
         for i, out in enumerate(outs):
-            outs[i] /= batch_end 
+            outs[i] /= samples_per_epoch_valid
+        
+        _stop_eval.set()
         return outs[0]
+
+    def predict_on_generator(self, data_generator, nb_sample, verbose=0):
+        '''Compute the loss on some input data generator, batch by batch.
+
+        Arguments: see `fit` method.
+        '''
+        max_queue_size_pred = 10
+        wait_time_pred = 0.05
+        outs = []
+        if verbose = 1:
+            progbar = Progbar(target=nb_sample)
+
+        # start generator thread storing batches into a queue
+        generator_queue_pred = queue.Queue()
+        _stop_pred = threading.Event()
+        
+        # util function to validate the batches produced by the generator
+        def input_validation_pred(generator_output):
+            if type(generator_output) in [list, tuple]:
+                if len(generator_output) == 2:
+                    data, sample_weight = generator_output
+                else:
+                    _stop_pred.set()
+                    raise Exception('The generator output tuple must have '
+                                    '2 dictionary elements: '
+                                    '(data, sample_weight).')
+            elif type(generator_output) == dict:
+                data = generator_output
+                sample_weight = {}
+            else:
+                _stop_pred.set()
+                raise Exception('The generator output must be '
+                                'a data dictionary or a tuple '
+                                '(data, sample_weight).')
+            assert type(data) == dict
+            assert type(sample_weight) == dict
+            if len(set([len(data[name]) for name in data.keys()] +
+                       [len(sample_weight[name]) for name in sample_weight.keys()])) != 1:
+                raise Exception('All input arrays and target arrays must have '
+                                'the same number of samples.')
+            sample_weight = {name: standardize_weights(data[name],
+                             sample_weight=sample_weight.get(name),
+                             sample_weight_mode=self.sample_weight_modes.get(name)) for name in self.output_order}
+            return data, sample_weight
+
+        def generator_task_pred(generator):
+            i = 0
+            while not _stop_pred.is_set():
+                try:
+                    if generator_queue_pred.qsize() < max_queue_size_pred:
+                        gen_output_pred = next(generator)
+                        generator_queue_pred.put(gen_output_pred)
+                        i += 1
+                    else:
+                        time.sleep(wait_time_pred)
+                except:
+                    # raise exception that shows generator is empty
+                    _stop_pred.set()
+                    return
+
+        generator_threads_pred = [threading.Thread(target=generator_task_pred, kwargs={'generator':data_generator}) for _ in range(nb_worker)]
+        for thread in generator_threads_pred:
+            thread.daemon = True
+            thread.start()
+
+        samples_seen_pred = 0
+        batch_index = 0
+        while samples_seen_pred < nb_sample:
+            if not generator_queue_pred.empty():
+                    generator_output_pred = generator_queue_pred.get()
+                elif not _stop_pred.is_set():
+                    time.sleep(wait_time_pred)
+                    continue
+                elif _stop_pred.is_set():
+                    print('threading is stopped.')
+                    break
+            ins = [generator_output_pred[name] for name in self.input_order]
+            if len(set([len(a) for a in ins])) != 1:
+                raise Exception('All input arrays and target arrays in validation must have '
+                                'the same number of samples.')
+            batch_outs = self._predict(ins)
+            if type(batch_outs) != list:
+                batch_outs = [batch_outs]
+            if batch_index == 0:
+                for batch_out in batch_outs:
+                    shape = (nb_sample,) + batch_out.shape[1:]
+                    outs.append(np.zeros(shape))
+            batch_size = len(ins)
+            for i, batch_out in enumerate(batch_outs):
+                outs[i][samples_seen_pred:samples_seen_pred+batch_size] = batch_out
+
+            samples_seen_pred += batch_size
+            batch_index += 1
+
+            if verbose == 1:
+                progbar.update(samples_seen_pred)
+        
+        _stop_pred.set()
+        return dict(zip(self.output_order, outs))
