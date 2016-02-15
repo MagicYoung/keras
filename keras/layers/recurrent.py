@@ -52,7 +52,6 @@ class Recurrent(MaskedLayer):
         of timesteps. To introduce masks to your data,
         use an [Embedding](embeddings.md) layer with the `mask_zero` parameter
         set to `True`.
-        **Note:** for the time being, masking is only supported with Theano.
 
     # TensorFlow warning
         For the time being, when using the TensorFlow backend,
@@ -125,31 +124,29 @@ class Recurrent(MaskedLayer):
     def get_output(self, train=False):
         # input shape: (nb_samples, time (padded with zeros), input_dim)
         X = self.get_input(train)
+        mask = self.get_input_mask(train)
+
         assert K.ndim(X) == 3
         if K._BACKEND == 'tensorflow':
             if not self.input_shape[1]:
                 raise Exception('When using TensorFlow, you should define ' +
                                 'explicitly the number of timesteps of ' +
-                                'your sequences. Make sure the first layer ' +
-                                'has a "batch_input_shape" argument ' +
-                                'including the samples axis.')
-
-        mask = self.get_output_mask(train)
-        if mask:
-            # apply mask
-            X *= K.cast(K.expand_dims(mask), X.dtype)
-            masking = True
-        else:
-            masking = False
-
+                                'your sequences.\n' +
+                                'If your first layer is an Embedding, ' +
+                                'make sure to pass it an "input_length" ' +
+                                'argument. Otherwise, make sure ' +
+                                'the first layer has ' +
+                                'an "input_shape" or "batch_input_shape" ' +
+                                'argument, including the time axis.')
         if self.stateful:
             initial_states = self.states
         else:
             initial_states = self.get_initial_states(X)
 
-        last_output, outputs, states = K.rnn(self.step, X, initial_states,
+        last_output, outputs, states = K.rnn(self.step, X,
+                                             initial_states,
                                              go_backwards=self.go_backwards,
-                                             masking=masking)
+                                             mask=mask)
         if self.stateful:
             self.updates = []
             for i in range(len(states)):
@@ -163,10 +160,14 @@ class Recurrent(MaskedLayer):
     def get_config(self):
         config = {"name": self.__class__.__name__,
                   "return_sequences": self.return_sequences,
-                  "input_dim": self.input_dim,
-                  "input_length": self.input_length,
                   "go_backwards": self.go_backwards,
                   "stateful": self.stateful}
+        if self.stateful:
+            config['batch_input_shape'] = self.input_shape
+        else:
+            config['input_dim'] = self.input_dim
+            config['input_length'] = self.input_length
+            
         base_config = super(Recurrent, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
@@ -206,7 +207,7 @@ class SimpleRNN(Recurrent):
         self.W = self.init((input_dim, self.output_dim))
         self.U = self.inner_init((self.output_dim, self.output_dim))
         self.b = K.zeros((self.output_dim,))
-        self.params = [self.W, self.U, self.b]
+        self.trainable_weights = [self.W, self.U, self.b]
 
         if self.initial_weights is not None:
             self.set_weights(self.initial_weights)
@@ -289,10 +290,9 @@ class GRU(Recurrent):
         self.U_h = self.inner_init((self.output_dim, self.output_dim))
         self.b_h = K.zeros((self.output_dim,))
 
-        self.params = [self.W_z, self.U_z, self.b_z,
-                       self.W_r, self.U_r, self.b_r,
-                       self.W_h, self.U_h, self.b_h]
-
+        self.trainable_weights = [self.W_z, self.U_z, self.b_z,
+                                  self.W_r, self.U_r, self.b_r,
+                                  self.W_h, self.U_h, self.b_h]
         if self.stateful:
             self.reset_states()
         else:
@@ -405,10 +405,10 @@ class LSTM(Recurrent):
         self.U_o = self.inner_init((self.output_dim, self.output_dim))
         self.b_o = K.zeros((self.output_dim,))
 
-        self.params = [self.W_i, self.U_i, self.b_i,
-                       self.W_c, self.U_c, self.b_c,
-                       self.W_f, self.U_f, self.b_f,
-                       self.W_o, self.U_o, self.b_o]
+        self.trainable_weights = [self.W_i, self.U_i, self.b_i,
+                                  self.W_c, self.U_c, self.b_c,
+                                  self.W_f, self.U_f, self.b_f,
+                                  self.W_o, self.U_o, self.b_o]
 
         if self.initial_weights is not None:
             self.set_weights(self.initial_weights)

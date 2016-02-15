@@ -89,23 +89,47 @@ def weighted_objective(fn):
             #  to the number of unmasked samples.
             score_array /= K.mean(mask)
 
-        # reduce score_array to 1D
+        # reduce score_array to same ndim as weight array
         ndim = K.ndim(score_array)
-        for d in range(ndim-1):
-            score_array = K.mean(score_array, axis=-1)
+        weight_ndim = K.ndim(weights)
+        score_array = K.mean(score_array, axis=list(range(weight_ndim, ndim)))
 
+        # apply sample weighting
         if weights is not None:
             score_array *= weights
+            score_array /= K.mean(K.cast(K.not_equal(weights, 0), K.floatx()))
         return K.mean(score_array)
     return weighted
 
 
-def standardize_weights(y, sample_weight=None, class_weight=None):
+def standardize_weights(y, sample_weight=None, class_weight=None,
+                        sample_weight_mode=None):
+    '''Weight input validation and standardization to a single sample-wise
+    (or timestep-wise) weight array.
     '''
-    '''
+    if sample_weight_mode is not None:
+        if sample_weight_mode != 'temporal':
+            raise Exception('"sample_weight_mode '
+                            'should be None or "temporal".')
+        if y.ndim < 3:
+            raise Exception('Timestep-wise sample weighting (use of '
+                            'sample_weight_mode="temporal") is restricted to '
+                            'outputs that are at least 3D, i.e. that have '
+                            'a time dimension.')
+        if sample_weight is not None and sample_weight.ndim != 2:
+            raise Exception('In order to use timestep-wise sample weighting, '
+                            'you should pass a 2D sample_weight array.')
+    else:
+        if sample_weight is not None and sample_weight.ndim != 1:
+            raise Exception('In order to use timestep-wise sample weights, '
+                            'you should specify sample_weight_mode="temporal" '
+                            'in compile(). If you just mean to use '
+                            'sample-wise weights, make sure your '
+                            'sample_weight array is 1D.')
     if sample_weight is not None:
-        assert len(sample_weight) == len(y)
-        return sample_weight.flatten()
+        assert sample_weight.ndim <= y.ndim
+        assert y.shape[:sample_weight.ndim] == sample_weight.shape
+        return sample_weight
     elif isinstance(class_weight, dict):
         if len(y.shape) > 2:
             raise Exception('class_weight not supported for '
@@ -119,7 +143,10 @@ def standardize_weights(y, sample_weight=None, class_weight=None):
         weights = np.asarray([class_weight[cls] for cls in y_classes])
         return weights
     else:
-        return np.ones((y.shape[0],))
+        if sample_weight_mode is None:
+            return np.ones((y.shape[0],))
+        else:
+            return np.ones((y.shape[0], y.shape[1]))
 
 
 def model_from_yaml(yaml_string, custom_objects={}):
@@ -150,8 +177,10 @@ def model_from_config(config, custom_objects={}):
     model = container_from_config(config, custom_objects=custom_objects)
     if model_name == 'Graph':
         model.__class__ = Graph
+        model.name = model_name
     elif model_name == 'Sequential':
         model.__class__ = Sequential
+        model.name = model_name
 
     if 'optimizer' in config:
         # if it has an optimizer, the model is assumed to be compiled
@@ -385,7 +414,7 @@ class Model(object):
 
             # if obj is any numpy type
             if type(obj).__module__ == np.__name__:
-                return obj.item();
+                return obj.item()
 
             # if obj is a python 'type'
             if type(obj).__name__ == type.__name__:
@@ -409,7 +438,8 @@ class Sequential(Model, containers.Sequential):
     Inherits from containers.Sequential.
     '''
     def compile(self, optimizer, loss,
-                class_mode="categorical"):
+                class_mode="categorical",
+                sample_weight_mode=None):
         '''Configure the learning process.
 
         # Arguments
@@ -420,8 +450,12 @@ class Sequential(Model, containers.Sequential):
             class_mode: one of "categorical", "binary".
                 This is only used for computing classification accuracy or
                 using the predict_classes method.
+            sample_weight_mode: if you need to do timestep-wise
+                sample weighting (2D weights), set this to "temporal".
+                "None" defaults to sample-wise weights (1D).
         '''
         self.optimizer = optimizers.get(optimizer)
+        self.sample_weight_mode = sample_weight_mode
 
         self.loss = objectives.get(loss)
         weighted_loss = weighted_objective(self.loss)
@@ -435,8 +469,11 @@ class Sequential(Model, containers.Sequential):
 
         # target of model
         self.y = K.placeholder(ndim=K.ndim(self.y_train))
-        # weights: one scalar per sample
-        self.weights = K.placeholder(ndim=1)
+
+        if self.sample_weight_mode == 'temporal':
+            self.weights = K.placeholder(ndim=2)
+        else:
+            self.weights = K.placeholder(ndim=1)
 
         if hasattr(self.layers[-1], "get_output_mask"):
             mask = self.layers[-1].get_output_mask()
@@ -460,7 +497,7 @@ class Sequential(Model, containers.Sequential):
 
         for r in self.regularizers:
             train_loss = r(train_loss)
-        updates = self.optimizer.get_updates(self.params,
+        updates = self.optimizer.get_updates(self.trainable_weights,
                                              self.constraints,
                                              train_loss)
         updates += self.updates
@@ -512,16 +549,16 @@ class Sequential(Model, containers.Sequential):
                 class accuracy in the logs to stdout at each epoch.
             class_weight: dictionary mapping classes to a weight value,
                 used for scaling the loss function (during training only).
-            sample_weight: list or numpy array with 1:1 mapping to
+            sample_weight: list or numpy array of weights for
                 the training samples, used for scaling the loss function
-                (during training only). For time-distributed data,
-                there is one weight per sample *per timestep*,
-                i.e. if your output data is shaped
-                `(nb_samples, timesteps, output_dim)`,
-                your mask should be of shape `(nb_samples, timesteps, 1)`.
-                This allows you to mask out or reweight individual
-                output timesteps, which is useful
-                in sequence to sequence learning.
+                (during training only). You can either pass a flat (1D)
+                Numpy array with the same length as the input samples
+                (1:1 mapping between weights and samples),
+                or in the case of temporal data,
+                you can pass a 2D array with shape (samples, sequence_length),
+                to apply a different weight to every timestep of every sample.
+                In this case you should make sure to specify
+                sample_weight_mode="temporal" in compile().
         '''
         if type(X) == list:
             if len(set([len(a) for a in X] + [len(y)])) != 1:
@@ -567,7 +604,8 @@ class Sequential(Model, containers.Sequential):
                 X_val = standardize_X(X_val)
                 y_val = standardize_y(y_val)
                 sample_weight_val = standardize_weights(y_val,
-                                                        sample_weight=sample_weight_val)
+                                                        sample_weight=sample_weight_val,
+                                                        sample_weight_mode=self.sample_weight_mode)
             else:
                 raise Exception('Invalid format for validation data; '
                                 'provide a tuple (X_val, y_val) or '
@@ -583,7 +621,8 @@ class Sequential(Model, containers.Sequential):
             if sample_weight is not None:
                 sample_weight, sample_weight_val = (slice_X(sample_weight, 0, split_at), slice_X(sample_weight, split_at))
                 sample_weight_val = standardize_weights(y_val,
-                                                        sample_weight=sample_weight_val)
+                                                        sample_weight=sample_weight_val,
+                                                        sample_weight_mode=self.sample_weight_mode)
             else:
                 sample_weight_val = standardize_weights(y_val)
             val_ins = X_val + [y_val, sample_weight_val]
@@ -596,7 +635,8 @@ class Sequential(Model, containers.Sequential):
             out_labels = ['loss']
 
         sample_weight = standardize_weights(y, class_weight=class_weight,
-                                            sample_weight=sample_weight)
+                                            sample_weight=sample_weight,
+                                            sample_weight_mode=self.sample_weight_mode)
         ins = X + [y, sample_weight]
         metrics = ['loss', 'acc', 'val_loss', 'val_acc']
         return self._fit(f, ins, out_labels=out_labels,
@@ -683,7 +723,8 @@ class Sequential(Model, containers.Sequential):
                                                   'as X and y.')
         X = standardize_X(X)
         y = standardize_y(y)
-        sample_weight = standardize_weights(y, sample_weight=sample_weight)
+        sample_weight = standardize_weights(y, sample_weight=sample_weight,
+                                            sample_weight_mode=self.sample_weight_mode)
 
         ins = X + [y, sample_weight]
         if show_accuracy:
@@ -722,7 +763,8 @@ class Sequential(Model, containers.Sequential):
         X = standardize_X(X)
         y = standardize_y(y)
         sample_weight = standardize_weights(y, class_weight=class_weight,
-                                            sample_weight=sample_weight)
+                                            sample_weight=sample_weight,
+                                            sample_weight_mode=self.sample_weight_mode)
         ins = X + [y, sample_weight]
         if accuracy:
             return self._train_with_acc(ins)
@@ -751,7 +793,8 @@ class Sequential(Model, containers.Sequential):
                                                   'as X and y.')
         X = standardize_X(X)
         y = standardize_y(y)
-        sample_weight = standardize_weights(y, sample_weight=sample_weight)
+        sample_weight = standardize_weights(y, sample_weight=sample_weight,
+                                            sample_weight_mode=self.sample_weight_mode)
 
         ins = X + [y, sample_weight]
         if accuracy:
@@ -861,18 +904,18 @@ class Sequential(Model, containers.Sequential):
         # Examples
 
         ```python
-        def generate_arrays_from_file(path):
-            while 1:
-                f = open(path)
-                for line in f:
-                    # create numpy arrays of input data
-                    # and labels, from each line in the file
-                    x, y = process_line(line)
-                    yield x, y
-                f.close()
+            def generate_arrays_from_file(path):
+                while 1:
+                    f = open(path)
+                    for line in f:
+                        # create numpy arrays of input data
+                        # and labels, from each line in the file
+                        x, y = process_line(line)
+                        yield x, y
+                    f.close()
 
-        model.fit_generator(generate_arrays_from_file('/my_file.txt'),
-                            samples_per_epoch=10000, nb_epoch=10)
+            model.fit_generator(generate_arrays_from_file('/my_file.txt'),
+                                samples_per_epoch=10000, nb_epoch=10)
         ```
         '''
         max_queue_size = 10  # maximum number of batches in queue
@@ -908,13 +951,14 @@ class Sequential(Model, containers.Sequential):
         def input_validation(generator_output):
             if not hasattr(generator_output, '__len__'):
                 _stop.set()
-                raise Exception('The generator output must be a tuple.')
+                raise Exception('The generator output must be a tuple. Found: ' + str(type(generator_output)))
             if len(generator_output) == 2:
                 X, y = generator_output
                 if type(X) == list:
                     assert len(set([len(a) for a in X] + [len(y)])) == 1
                 else:
                     assert len(X) == len(y)
+                    X = [X]
                 sample_weight = None
             elif len(generator_output) == 3:
                 X, y, sample_weight = generator_output
@@ -922,11 +966,21 @@ class Sequential(Model, containers.Sequential):
                     assert len(set([len(a) for a in X] + [len(y), len(sample_weight)])) == 1
                 else:
                     assert len(X) == len(y) == len(sample_weight)
+                    X = [X]
             else:
                 _stop.set()
                 raise Exception('The generator output tuple must have '
                                 '2 or 3 elements.')
+
+            sample_weight = standardize_weights(y, sample_weight=sample_weight,
+                                                sample_weight_mode=self.sample_weight_mode)
             return X, y, sample_weight
+
+        if do_validation:
+            X_val, y_val, sample_weight_val = input_validation(validation_data)
+            self.validation_data = X_val + [y_val, sample_weight_val]
+        else:
+            self.validation_data = None
 
         # start generator thread storing batches into a queue
         generator_queue = queue.Queue()
@@ -936,19 +990,23 @@ class Sequential(Model, containers.Sequential):
             i = 0
             while not _stop.is_set(): # True iff internal flag is True.
                 try:
-                    if generator_queue.qsize() < max_queue_size: 
+                    if generator_queue.qsize() < max_queue_size:
                     # althought initial queue size is infinite, .qsize() is still 0, and .empty() True.
-                        generator_output = next(generator)
+                        try:
+                            generator_output = next(generator)
+                        except ValueError:
+                            continue
                         generator_queue.put(generator_output)
                         i += 1
                     else:
                         time.sleep(wait_time)
                 except:
                     _stop.set()
-                    return
+                    raise
 
         generator_threads = [threading.Thread(target=generator_task) for _ in range(nb_worker)]
         for thread in generator_threads:
+            thread.daemon = True
             thread.start()
 
         self.stop_training = False
@@ -957,6 +1015,7 @@ class Sequential(Model, containers.Sequential):
             samples_seen = 0
             batch_index = 0
             while samples_seen < samples_per_epoch:
+                generator_output = None
                 while not _stop.is_set():
                     if not generator_queue.empty():
                         generator_output = generator_queue.get()
@@ -995,10 +1054,9 @@ class Sequential(Model, containers.Sequential):
                             raise NotImplementedError()
                         else:
                             # input validation
-                            X, y, sample_weight = input_validation(validation_data)
-                            val_outs = self.evaluate(X, y,
+                            val_outs = self.evaluate(X_val, y_val,
                                                      show_accuracy=show_accuracy,
-                                                     sample_weight=sample_weight,
+                                                     sample_weight=sample_weight_val,
                                                      verbose=0)
                         if type(val_outs) != list:
                             val_outs = [val_outs]
@@ -1024,7 +1082,7 @@ class Graph(Model, containers.Graph):
 
     Inherits from `containers.Graph`.
     '''
-    def compile(self, optimizer, loss):
+    def compile(self, optimizer, loss, sample_weight_modes={}):
         '''Configure the learning process.
 
         # Arguments
@@ -1033,7 +1091,17 @@ class Graph(Model, containers.Graph):
             loss: dictionary mapping the name(s) of the output(s) to
                 a loss function (string name of objective function or
                 objective function. See [objectives](objectives.md)).
+            sample_weight_modes: optional dictionary mapping certain
+                output names to a sample weight mode ("temporal" and None
+                are the only supported modes). If you need to do
+                timestep-wise loss weighting on one of your graph outputs,
+                you will need to set the sample weight mode for this output
+                to "temporal".
         '''
+        assert type(loss) is dict, 'The "loss" argument should be a dictionary.'
+        assert type(sample_weight_modes) is dict, 'The "sample_weight_modes" argument should be a dictionary.'
+
+        self.sample_weight_modes = sample_weight_modes
         ys = []
         ys_train = []
         ys_test = []
@@ -1055,7 +1123,10 @@ class Graph(Model, containers.Graph):
             else:
                 mask = None
 
-            weight = K.placeholder(ndim=1)
+            if sample_weight_modes.get(output_name) == 'temporal':
+                weight = K.placeholder(ndim=2)
+            else:
+                weight = K.placeholder(ndim=1)
             weights.append(weight)
             weighted_loss = weighted_objective(objectives.get(loss_fn))
             train_loss += weighted_loss(y, y_train, weight, mask)
@@ -1068,7 +1139,7 @@ class Graph(Model, containers.Graph):
         for r in self.regularizers:
             train_loss = r(train_loss)
         self.optimizer = optimizers.get(optimizer)
-        updates = self.optimizer.get_updates(self.params,
+        updates = self.optimizer.get_updates(self.trainable_weights,
                                              self.constraints,
                                              train_loss)
         updates += self.updates
@@ -1118,7 +1189,8 @@ class Graph(Model, containers.Graph):
                             'the same number of samples.')
 
         sample_weight_list = [standardize_weights(y[i],
-                                                  sample_weight=sample_weight.get(self.output_order[i])) for i in range(len(self.output_order))]
+                                                  sample_weight=sample_weight.get(self.output_order[i]),
+                                                  sample_weight_mode=self.sample_weight_modes.get(self.output_order[i])) for i in range(len(self.output_order))]
         class_weight_list = [class_weight.get(name) for name in self.output_order]
 
         val_f = None
@@ -1144,7 +1216,8 @@ class Graph(Model, containers.Graph):
 
         sample_weight_list = [standardize_weights(y[i],
                                                   sample_weight=sample_weight_list[i],
-                                                  class_weight=class_weight_list[i]) for i in range(len(self.output_order))]
+                                                  class_weight=class_weight_list[i],
+                                                  sample_weight_mode=self.sample_weight_modes.get(self.output_order[i])) for i in range(len(self.output_order))]
         ins = X + y + sample_weight_list
         history = self._fit(f, ins, out_labels=out_labels,
                             batch_size=batch_size, nb_epoch=nb_epoch,
@@ -1159,7 +1232,8 @@ class Graph(Model, containers.Graph):
         Arguments: see `fit` method.
         '''
         sample_weight = [standardize_weights(data[name],
-                                             sample_weight=sample_weight.get(name)) for name in self.output_order]
+                                             sample_weight=sample_weight.get(name),
+                                             sample_weight_mode=self.sample_weight_modes.get(name)) for name in self.output_order]
         ins = [data[name] for name in self.input_order] + [standardize_y(data[name]) for name in self.output_order] + sample_weight
         if len(set([len(a) for a in ins])) != 1:
             raise Exception('All input arrays and target arrays must have '
@@ -1229,7 +1303,8 @@ class Graph(Model, containers.Graph):
         '''
         sample_weight = [standardize_weights(data[name],
                                              sample_weight=sample_weight.get(name),
-                                             class_weight=class_weight.get(name)) for name in self.output_order]
+                                             class_weight=class_weight.get(name),
+                                             sample_weight_mode=self.sample_weight_modes.get(name)) for name in self.output_order]
         ins = [data[name] for name in self.input_order] + [standardize_y(data[name]) for name in self.output_order] + sample_weight
         if len(set([len(a) for a in ins])) != 1:
             raise Exception('All input arrays and target arrays must have '
@@ -1242,7 +1317,8 @@ class Graph(Model, containers.Graph):
         Arguments: see `fit` method.
         '''
         sample_weight = [standardize_weights(data[name],
-                                             sample_weight=sample_weight.get(name)) for name in self.output_order]
+                                             sample_weight=sample_weight.get(name),
+                                             sample_weight_mode=self.sample_weight_modes.get(name)) for name in self.output_order]
         ins = [data[name] for name in self.input_order] + [standardize_y(data[name]) for name in self.output_order] + sample_weight
         if len(set([len(a) for a in ins])) != 1:
             raise Exception('All input arrays and target arrays must have '
@@ -1344,18 +1420,18 @@ class Graph(Model, containers.Graph):
         # Examples
 
         ```python
-        def generate_arrays_from_file(path):
-            while 1:
-                f = open(path)
-                for line in f:
-                    # create numpy arrays of input data
-                    # and labels, from each line in the file
-                    x1, x2, y = process_line(line)
-                    yield {'input_1': x1, 'input_2': x2, 'output': y}
-                f.close()
+            def generate_arrays_from_file(path):
+                while 1:
+                    f = open(path)
+                    for line in f:
+                        # create numpy arrays of input data
+                        # and labels, from each line in the file
+                        x1, x2, y = process_line(line)
+                        yield {'input_1': x1, 'input_2': x2, 'output': y}
+                    f.close()
 
-        graph.fit_generator(generate_arrays_from_file('/my_file.txt'),
-                            samples_per_epoch=10000, nb_epoch=10)
+            graph.fit_generator(generate_arrays_from_file('/my_file.txt'),
+                                samples_per_epoch=10000, nb_epoch=10)
         ```
         '''
         max_queue_size = 10  # maximum number of batches in queue
@@ -1410,9 +1486,20 @@ class Graph(Model, containers.Graph):
                        [len(sample_weight[name]) for name in sample_weight.keys()])) != 1:
                 raise Exception('All input arrays and target arrays must have '
                                 'the same number of samples.')
+            sample_weight = {name: standardize_weights(data[name],
+                             sample_weight=sample_weight.get(name),
+                             sample_weight_mode=self.sample_weight_modes.get(name)) for name in self.output_order}
             return data, sample_weight
 
-        # start generator thread storing training batches into a queue
+        if do_validation:
+            data_val, sample_weight_val = input_validation(validation_data)
+            sample_weight_val_l = [sample_weight_val[name] for name in self.output_order]
+            y_val = [standardize_y(data_val[name]) for name in self.output_order]
+            self.validation_data = [data_val[name] for name in self.input_order] + y_val + sample_weight_val_l
+        else:
+            self.validation_data = None
+
+        # start generator thread storing batches into a queue
         generator_queue = queue.Queue()
         _stop = threading.Event()
 
@@ -1432,6 +1519,7 @@ class Graph(Model, containers.Graph):
 
         generator_threads = [threading.Thread(target=generator_task) for _ in range(nb_worker)]
         for thread in generator_threads:
+            thread.daemon = True
             thread.start()
 
         self.stop_training = False
@@ -1477,10 +1565,8 @@ class Graph(Model, containers.Graph):
                             #_stop.set()
                             #raise NotImplementedError()
                         else:
-                            # input validation
-                            data, sample_weight = input_validation(validation_data)
-                            val_outs = self.evaluate(data,
-                                                     sample_weight=sample_weight,
+                            val_outs = self.evaluate(data_val,
+                                                     sample_weight=sample_weight_val,
                                                      verbose=0)
                         if type(val_outs) != list:
                             val_outs = [val_outs]

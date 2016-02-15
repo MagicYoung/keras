@@ -357,6 +357,7 @@ def test_merge_overlap():
 
 def test_lambda():
     (X_train, y_train), (X_test, y_test) = _get_test_data()
+
     def func(X):
         s = X[0]
         for i in range(1, len(X)):
@@ -419,6 +420,22 @@ def test_lambda():
 
     nloss = model.evaluate([X_test, X_test], y_test, verbose=0)
     assert(loss == nloss)
+
+    # test "join" mode in Lambda
+    def difference(input_dict):
+        assert(len(input_dict) == 2)
+        keys = list(input_dict.keys())
+        return input_dict[keys[0]] - input_dict[keys[1]]
+
+    g = Graph()
+    g.add_input(name='input_a', input_shape=(2,))
+    g.add_input(name='input_b', input_shape=(2,))
+    g.add_node(Lambda(difference),
+               inputs=['input_a', 'input_b'],
+               merge_mode='join',
+               name='d')
+    g.add_output(name='output', input='d')
+    g.compile(loss={'output': 'categorical_crossentropy'}, optimizer='rmsprop')
 
 
 def test_sequential_count_params():
@@ -944,4 +961,5 @@ def test_count_params():
 
 
 if __name__ == '__main__':
-    pytest.main([__file__])
+    # pytest.main([__file__])
+    test_lambda()

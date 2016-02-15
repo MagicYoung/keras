@@ -80,7 +80,7 @@ def get_method_signature(method):
     for a in args:
         st += str(a) + ', '
     for a, v in kwargs:
-        if  type(v) == str:
+        if type(v) == str:
             v = '\'' + v + '\''
         elif type(v) == unicode:
             v = 'u\'' + v + '\''
@@ -117,26 +117,30 @@ def code_snippet(snippet):
 
 
 def process_class_docstring(docstring):
-    docstring = re.sub(r'    # (.*)\n',
-                       r'    __\1__\n\n',
+    docstring = re.sub(r'\n    # (.*)\n',
+                       r'\n    __\1__\n\n',
                        docstring)
 
     docstring = re.sub(r'    ([^\s\\]+):(.*)\n',
                        r'    - __\1__:\2\n',
                        docstring)
+
+    docstring = docstring.replace('    ' * 5, '\t\t')
     docstring = docstring.replace('    ' * 3, '\t')
     docstring = docstring.replace('    ', '')
     return docstring
 
 
 def process_method_docstring(docstring):
-    docstring = re.sub(r'    # (.*)\n',
-                       r'    __\1__\n\n',
+    docstring = re.sub(r'\n        # (.*)\n',
+                       r'\n        __\1__\n\n',
                        docstring)
 
     docstring = re.sub(r'    ([^\s\\]+):(.*)\n',
                        r'    - __\1__:\2\n',
                        docstring)
+
+    docstring = docstring.replace('    ' * 6, '\t\t')
     docstring = docstring.replace('    ' * 4, '\t')
     docstring = docstring.replace('    ', '')
     return docstring

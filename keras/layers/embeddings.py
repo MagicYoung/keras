@@ -71,7 +71,7 @@ class Embedding(Layer):
         self.input = K.placeholder(shape=(self.input_shape[0], self.input_length),
                                    dtype='int32')
         self.W = self.init((self.input_dim, self.output_dim))
-        self.params = [self.W]
+        self.trainable_weights = [self.W]
         self.regularizers = []
         if self.W_regularizer:
             self.W_regularizer.set_param(self.W)
@@ -89,9 +89,7 @@ class Embedding(Layer):
         if not self.mask_zero:
             return None
         else:
-            if K._BACKEND == "tensorflow":
-                raise Exception("Masking is Theano-only for the time being.")
-            return K.ones_like(X) * (1 - K.equal(X, 0))
+            return K.not_equal(X, 0)
 
     @property
     def output_shape(self):

@@ -114,16 +114,20 @@ class TestBackend(object):
 
         check_single_tensor_operation('min', (4, 2))
         check_single_tensor_operation('min', (4, 2), axis=1, keepdims=True)
+        check_single_tensor_operation('min', (4, 2, 3), axis=[1, -1])
 
         check_single_tensor_operation('mean', (4, 2))
         check_single_tensor_operation('mean', (4, 2), axis=1, keepdims=True)
         check_single_tensor_operation('mean', (4, 2, 3), axis=-1, keepdims=True)
+        check_single_tensor_operation('mean', (4, 2, 3), axis=[1, -1])
 
         check_single_tensor_operation('std', (4, 2))
         check_single_tensor_operation('std', (4, 2), axis=1, keepdims=True)
+        check_single_tensor_operation('std', (4, 2, 3), axis=[1, -1])
 
         check_single_tensor_operation('prod', (4, 2))
         check_single_tensor_operation('prod', (4, 2), axis=1, keepdims=True)
+        check_single_tensor_operation('prod', (4, 2, 3), axis=[1, -1])
 
         # does not work yet, wait for bool <-> int casting in TF (coming soon)
         # check_single_tensor_operation('any', (4, 2))
@@ -223,7 +227,7 @@ class TestBackend(object):
         last_output, outputs, new_states = KTH.rnn(th_rnn_step_fn, inputs,
                                                    initial_states,
                                                    go_backwards=False,
-                                                   masking=False)
+                                                   mask=None)
         th_last_output = KTH.eval(last_output)
         th_outputs = KTH.eval(outputs)
         assert len(new_states) == 1
@@ -235,7 +239,7 @@ class TestBackend(object):
         last_output, outputs, new_states = KTF.rnn(tf_rnn_step_fn, inputs,
                                                    initial_states,
                                                    go_backwards=False,
-                                                   masking=False)
+                                                   mask=None)
         tf_last_output = KTF.eval(last_output)
         tf_outputs = KTF.eval(outputs)
         assert len(new_states) == 1
@@ -326,28 +330,30 @@ class TestBackend(object):
     def test_random_normal(self):
         mean = 0.
         std = 1.
-        rand = KTF.get_value(KTF.random_normal((1000, 1000), mean=mean, std=std))
+        rand = KTF.eval(KTF.random_normal((1000, 1000), mean=mean, std=std))
         assert(rand.shape == (1000, 1000))
         assert(np.abs(np.mean(rand) - mean) < 0.01)
         assert(np.abs(np.std(rand) - std) < 0.01)
 
-        rand = KTF.get_value(KTF.random_normal((1000, 1000), mean=mean, std=std))
+        rand = KTH.eval(KTH.random_normal((1000, 1000), mean=mean, std=std))
         assert(rand.shape == (1000, 1000))
         assert(np.abs(np.mean(rand) - mean) < 0.01)
         assert(np.abs(np.std(rand) - std) < 0.01)
 
     def test_random_uniform(self):
-        mean = 0.
-        std = 1.
-        rand = KTF.get_value(KTF.random_normal((1000, 1000), mean=mean, std=std))
+        min = -1.
+        max = 1.
+        rand = KTF.eval(KTF.random_uniform((1000, 1000), min, max))
         assert(rand.shape == (1000, 1000))
-        assert(np.abs(np.mean(rand) - mean) < 0.01)
-        assert(np.abs(np.std(rand) - std) < 0.01)
+        assert(np.abs(np.mean(rand)) < 0.01)
+        assert(np.max(rand) <= max)
+        assert(np.min(rand) >= min)
 
-        rand = KTF.get_value(KTF.random_normal((1000, 1000), mean=mean, std=std))
+        rand = KTH.eval(KTH.random_uniform((1000, 1000), min, max))
         assert(rand.shape == (1000, 1000))
-        assert(np.abs(np.mean(rand) - mean) < 0.01)
-        assert(np.abs(np.std(rand) - std) < 0.01)
+        assert(np.abs(np.mean(rand)) < 0.01)
+        assert(np.max(rand) <= max)
+        assert(np.min(rand) >= min)
 
 
 if __name__ == '__main__':

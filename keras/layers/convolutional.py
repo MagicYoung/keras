@@ -109,7 +109,7 @@ class Convolution1D(Layer):
         self.W_shape = (self.nb_filter, input_dim, self.filter_length, 1)
         self.W = self.init(self.W_shape)
         self.b = K.zeros((self.nb_filter,))
-        self.params = [self.W, self.b]
+        self.trainable_weights = [self.W, self.b]
         self.regularizers = []
 
         if self.W_regularizer:
@@ -184,9 +184,10 @@ class Convolution2D(Layer):
 
     # Output shape
         4D tensor with shape:
-        `(samples, nb_filter, nb_row, nb_col)` if dim_ordering='th'
+        `(samples, nb_filter, new_rows, new_cols)` if dim_ordering='th'
         or 4D tensor with shape:
-        `(samples, nb_row, nb_col, nb_filter)` if dim_ordering='tf'.
+        `(samples, new_rows, new_cols, nb_filter)` if dim_ordering='tf'.
+        `rows` and `cols` values might have changed due to padding.
 
 
     # Arguments
@@ -264,7 +265,7 @@ class Convolution2D(Layer):
             raise Exception('Invalid dim_ordering: ' + self.dim_ordering)
         self.W = self.init(self.W_shape)
         self.b = K.zeros((self.nb_filter,))
-        self.params = [self.W, self.b]
+        self.trainable_weights = [self.W, self.b]
         self.regularizers = []
 
         if self.W_regularizer:
@@ -421,7 +422,7 @@ class MaxPooling1D(_Pooling1D):
 class AveragePooling1D(_Pooling1D):
     '''Average pooling for temporal data.
 
-        # Input shape
+    # Input shape
         3D tensor with shape: `(samples, steps, features)`.
 
     # Output shape
