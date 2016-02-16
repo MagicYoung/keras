@@ -1754,7 +1754,7 @@ class Graph(Model, containers.Graph):
         max_queue_size_eval = 10
         wait_time_eval = 0.05
         outs = []
-        if verbose = 1:
+        if verbose == 1:
             progbar = Progbar(target=samples_per_epoch_valid)
 
         # start generator thread storing batches into a queue
@@ -1814,19 +1814,20 @@ class Graph(Model, containers.Graph):
         batch_index = 0
         while samples_seen_eval < samples_per_epoch_valid:
             if not generator_queue_eval.empty():
-                    generator_output_eval = generator_queue_eval.get()
-                elif not _stop_eval.is_set():
-                    time.sleep(wait_time_eval)
-                    continue
-                elif _stop_eval.is_set():
-                    print('threading is stopped.')
-                    break
+                generator_output_eval = generator_queue_eval.get()
+            elif not _stop_eval.is_set():
+                time.sleep(wait_time_eval)
+                continue
+            elif _stop_eval.is_set():
+                print('threading is stopped.')
+                break
             
-            data_eval, sample_weight_eval = input_validation(generator_output_eval)
-            sample_weight = [standardize_weights(data_evalval[name],
+            data_eval, sample_weight_eval = input_validation_eval(generator_output_eval)
+            batch_size_eval = len(data_eval[list(data_eval.keys())[0]])
+            sample_weight = [standardize_weights(data_eval[name],
                         sample_weight=sample_weight_eval.get(name),
                         sample_weight_mode=self.sample_weight_modes.get(name)) for name in self.output_order]
-            ins = [data_eval[name] for name in self.input_order] + [standardize_y(data_eval[name]) for name in self.output_order] + sample_weight_eval
+            ins = [data_eval[name] for name in self.input_order] + [standardize_y(data_eval[name]) for name in self.output_order] + sample_weight
             if len(set([len(a) for a in ins])) != 1:
                 raise Exception('All input arrays and target arrays in validation must have '
                                 'the same number of samples.')
@@ -1836,13 +1837,13 @@ class Graph(Model, containers.Graph):
                     for batch_out in enumerate(batch_outs):
                         outs.append(0.)
                 for i, batch_out in enumerate(batch_outs):
-                    outs[i] += batch_out * len(batch_outs)
+                    outs[i] += batch_out * batch_size_eval
             else:
                 if batch_index == 0:
                     outs.append(0.)
-                outs[0] += batch_outs * len(batch_outs)
+                outs[0] += batch_outs * batch_size_eval
 
-            samples_seen_eval += len(batch_outs)
+            samples_seen_eval += batch_size_eval
             batch_index += 1
             if verbose == 1:
                 progbar.update(samples_seen_eval)
@@ -1853,7 +1854,7 @@ class Graph(Model, containers.Graph):
         _stop_eval.set()
         return outs[0]
 
-    def predict_on_generator(self, data_generator, nb_sample, verbose=0):
+    def predict_on_generator(self, data_generator, nb_sample, nb_worker=1, verbose=0):
         '''Compute the loss on some input data generator, batch by batch.
 
         Arguments: see `fit` method.
@@ -1861,7 +1862,7 @@ class Graph(Model, containers.Graph):
         max_queue_size_pred = 10
         wait_time_pred = 0.05
         outs = []
-        if verbose = 1:
+        if verbose == 1:
             progbar = Progbar(target=nb_sample)
 
         # start generator thread storing batches into a queue
@@ -1921,13 +1922,13 @@ class Graph(Model, containers.Graph):
         batch_index = 0
         while samples_seen_pred < nb_sample:
             if not generator_queue_pred.empty():
-                    generator_output_pred = generator_queue_pred.get()
-                elif not _stop_pred.is_set():
-                    time.sleep(wait_time_pred)
-                    continue
-                elif _stop_pred.is_set():
-                    print('threading is stopped.')
-                    break
+                generator_output_pred = generator_queue_pred.get()
+            elif not _stop_pred.is_set():
+                time.sleep(wait_time_pred)
+                continue
+            elif _stop_pred.is_set():
+                print('threading is stopped.')
+                break
             ins = [generator_output_pred[name] for name in self.input_order]
             if len(set([len(a) for a in ins])) != 1:
                 raise Exception('All input arrays and target arrays in validation must have '
@@ -1939,7 +1940,7 @@ class Graph(Model, containers.Graph):
                 for batch_out in batch_outs:
                     shape = (nb_sample,) + batch_out.shape[1:]
                     outs.append(np.zeros(shape))
-            batch_size = len(ins)
+            batch_size = len(generator_output_pred[list(generator_output_pred.keys())[0]])
             for i, batch_out in enumerate(batch_outs):
                 outs[i][samples_seen_pred:samples_seen_pred+batch_size] = batch_out
 
