@@ -315,6 +315,33 @@ def batch_flatten(x):
     return x
 
 
+def tdflatten(x):
+    '''Turn an n-D tensor into a 3D tensor where
+    the first two dimensions are conserved.
+    '''
+    size = T.prod(x[0].shape) // x[0].shape[0]
+    nshape = (x.shape[0], x.shape[1], size)
+    y = T.reshape(x, nshape)
+    return y
+
+def collapsetime(x):
+    '''Collapse first two dimensions consisting of 
+    num_samples and num_timesteps of 5D tensor to a 4D tensor 
+    with its first dimension being num_samples * num_timesteps.
+    '''
+    newshape = (x.shape[0]*x.shape[1], x.shape[2], x.shape[3], x.shape[4])
+    return T.reshape(x, newshape)
+
+def expandtime(x, y):
+    '''Reshape 4D tensor y to a 5D tensor with the original
+    num_samples and num_timesteps dimensions of 
+    5D tensor x. Inverse operation as collapsetime(x).
+    '''
+    newshape = (x.shape[0], x.shape[1], y.shape[1], y.shape[2], y.shape[3])
+    z = T.reshape(y, newshape)
+    return z
+
+
 def expand_dims(x, dim=-1):
     '''Add a 1-sized dimension at index "dim".
     '''
