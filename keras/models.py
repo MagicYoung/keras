@@ -1669,6 +1669,43 @@ class Graph(Model, containers.Graph):
         callbacks.on_train_end()
         return self.history
 
+
+    def predict_generator(self, generator, nb_samples,
+                               verbose=1, **kwargs):
+            '''Generate output predictions for the input samples batch by batch that are drawn
+               from the `generator`. 
+
+            Arguments:
+                generator:
+                    generator yielding dictionaries of the kind accepted
+                    by `fit_generator`, or tuples of such dictionaries and
+                    associated dictionaries of sample weights.
+                nb_samples:
+                    total number of samples to be predicted
+                verbose, max_q_size, wait_time, nb_worker: the same as `fit_generator`
+
+            '''
+            done_samples = 0
+            all_outs = []
+            q, _stop = generator_queue(generator, **kwargs)
+
+            batch_index = 0
+            while done_samples < nb_samples:
+                data, _ = self._check_generator_output(q.get(), _stop)
+                do_samples = len(data[next(iter(data.keys()))])
+                outs_dct = self.predict(data, batch_size=do_samples, verbose=verbose)
+                if batch_index == 0:
+                    shape = (nb_samples,) + outs_dct[next(iter(outs_dct.keys()))].shape[1:]
+                    all_outs.append(np.zeros(shape))
+                all_outs[0][done_samples:(done_samples+do_samples)]
+
+                done_samples += do_samples
+                batch_index += 1
+
+            _stop.set()
+            return dict(zip(self.output_order, all_outs))
+
+
     def fit_on_generator(self, data_generator, samples_per_epoch, nb_epoch, class_weight=None,
                       callbacks=[], validation_generator=None, samples_per_epoch_valid=100,
                       verbose=1, nb_worker=1):
@@ -1748,9 +1785,9 @@ class Graph(Model, containers.Graph):
         })
         callbacks.on_train_begin()
         
-        # start generator thread storing batches into a queue
-        generator_queue = queue.Queue()
-        _stop = threading.Event()
+        # # start generator thread storing batches into a queue
+        # generator_queue = queue.Queue()
+        # _stop = threading.Event()
 
         # util function to validate the batches produced by the generator
         def input_validation(generator_output):
@@ -1798,6 +1835,7 @@ class Graph(Model, containers.Graph):
 
         self.stop_training = False
         while epoch < nb_epoch:
+            _stop.clear()
             callbacks.on_epoch_begin(epoch)
             samples_seen = 0
             batch_index = 0
@@ -1845,24 +1883,23 @@ class Graph(Model, containers.Graph):
                 epoch_logs = {}
                 batch_index += 1
                 samples_seen += batch_size
-                if samples_seen >= samples_per_epoch:  # epoch finished
-                    if do_validation:
-                        validation_data = next(validation_generator)
-                        if hasattr(validation_data, 'next'):
-                            val_outs = self.evaluate_on_generator(validation_data,
-                                                            samples_per_epoch_valid,
-                                                            nb_worker)
-                        else:
-                            _stop.set()
-                            raise Exception('validation data is not a generator')
-                            # val_outs = self.evaluate(data_val,
-                            #                          sample_weight=sample_weight_val,
-                            #                          verbose=0)
-                        if type(val_outs) != list:
-                            val_outs = [val_outs]
-                        # same labels assumed
-                        for l, o in zip(out_labels, val_outs):
-                            epoch_logs['val_' + l] = o
+                if samples_seen >= samples_per_epoch and do_validation:
+                    validation_data = next(validation_generator)
+                    if hasattr(validation_data, 'next'):
+                        val_outs = self.evaluate_on_generator(validation_data,
+                                                        samples_per_epoch_valid,
+                                                        nb_worker)
+                    else:
+                        _stop.set()
+                        raise Exception('validation data is not a generator')
+                        # val_outs = self.evaluate(data_val,
+                        #                          sample_weight=sample_weight_val,
+                        #                          verbose=0)
+                    if type(val_outs) != list:
+                        val_outs = [val_outs]
+                    # same labels assumed
+                    for l, o in zip(out_labels, val_outs):
+                        epoch_logs['val_' + l] = o
         # if do_validation:
         #     data_val, sample_weight_val = input_validation(validation_data)
         #     sample_weight_val_l = [sample_weight_val[name] for name in self.output_order]
