@@ -1688,7 +1688,7 @@ class Graph(Model, containers.Graph):
 
 
     def predict_generator(self, generator, nb_samples,
-                               verbose=1, **kwargs):
+                               verbose=0, **kwargs):
             '''Generate output predictions for the input samples batch by batch that are drawn
                from the `generator`. 
 
