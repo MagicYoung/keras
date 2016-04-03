@@ -1000,7 +1000,6 @@ class Dense(Layer):
         self.constraints = [self.W_constraint, self.b_constraint]
 
         self.initial_weights = weights
-
         self.input_dim = input_dim
         if self.input_dim:
             kwargs['input_shape'] = (self.input_dim,)
@@ -1008,7 +1007,6 @@ class Dense(Layer):
 
     def build(self):
         input_dim = self.input_shape[1]
-
         self.W = self.init((input_dim, self.output_dim),
                            name='{}_W'.format(self.name))
         self.b = K.zeros((self.output_dim,),
