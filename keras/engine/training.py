@@ -1093,7 +1093,7 @@ class Model(Container):
 
         # Arguments
             x: the input data, as a Numpy array
-                (or list of Numpy arrays if the model has multiple outputs).
+                (or list of Numpy arrays if the model has multiple inputs).
             batch_size: integer.
             verbose: verbosity mode, 0 or 1.
 
